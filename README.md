@@ -115,7 +115,7 @@ You have two Cursor / Grok / Claude / ChatGPT logins (work + personal, client + 
 
 ## What you get
 
-- **Isolated logins & chats** — each clone has its own `--user-data-dir` / extensions dir
+- **Isolated logins & chats** — each clone has its own data directory. Cursor, Claude, and ChatGPT get `--user-data-dir`. Grok Bot does not honor that flag; its clones get `SAND_USER_DATA_DIR` and `SAND_DATA_ROOT` instead (see below).
 - **Shared app updates** — still the official app in `/Applications`
 - **Dock wrappers** — `Grok Bot Work.app`, `Cursor Personal.app`, etc. in `~/Applications`
 - **Optional deeper isolation** — private `~/.cursor` (skills / user rules) via a full-home overlay that still symlinks your real home
@@ -125,24 +125,36 @@ Supported today (if installed under `/Applications`):
 
 | App | Notes |
 |---|---|
-| [Grok Bot](https://cursor.com/bot/onboarding) | Bundle ID `com.anysphere.sand` |
+| [Grok Bot](https://cursor.com/bot/onboarding) | Bundle ID `com.anysphere.sand`. Clones need `SAND_USER_DATA_DIR` and `SAND_DATA_ROOT` — `--user-data-dir` alone exits immediately if the main app is running |
 | [Cursor](https://cursor.com) | Same clone model |
 | [Claude](https://claude.ai/download) | `com.anthropic.claudefordesktop` |
 | [ChatGPT](https://chatgpt.com/desktop) (Codex) | `com.openai.codex` — app is named ChatGPT.app |
 
 ## How a clone works
 
+Cursor, Claude, and ChatGPT are started with a private Chromium profile:
+
 ```text
-/Applications/Grok\ Bot.app/Contents/MacOS/Grok\ Bot \
+/Applications/Cursor.app/Contents/MacOS/Cursor \
   --user-data-dir=~/Library/Application\ Support/LotsOfAgents/Profiles/<id>/user-data \
   --extensions-dir=…/extensions
 ```
+
+Grok Bot (verified on 0.78.1, bundle `com.anysphere.sand`) ignores `--user-data-dir`. It resets the user-data path before Electron's single-instance lock, so a clone started that way sees the main Grok Bot and exits 0 immediately. The in-app **Launch** button and the `~/Applications` wrapper exec the Grok Bot binary with:
+
+| Variable | Path |
+|---|---|
+| `SAND_USER_DATA_DIR` | `…/LotsOfAgents/Profiles/<id>/user-data` |
+| `SAND_DATA_ROOT` | `…/LotsOfAgents/Profiles/<id>/data-root` |
+
+`SAND_DATA_ROOT` defaults to `~/.grokbot` (machine-connection credentials and daemon files). Each clone gets its own, or they would share the main app's data root. A successful isolated launch logs `[sand] using isolated user-data dir`. `open -n -a "Grok Bot" --env …` does not reliably apply these variables; the wrapper sets them and execs the binary. Cursor, Claude, and ChatGPT are unchanged. After you update Lots of Agents, existing Dock wrappers pick this up the next time they open.
 
 | Isolated per clone | Shared |
 |---|---|
 | Account / plan login | The real `.app` + its updates |
 | Chats, settings, extensions | Git, SSH, project files |
-| Optional private `~/.cursor` | Your real home (symlinked in overlay mode) |
+| Grok Bot `SAND_DATA_ROOT` | Your real home (symlinked in overlay mode) |
+| Optional private `~/.cursor` | |
 
 - Catalog / data: `~/Library/Application Support/LotsOfAgents/`
 - Wrappers: `~/Applications/`

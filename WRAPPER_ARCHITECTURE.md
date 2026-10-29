@@ -200,6 +200,7 @@ All environment variables are passed through to the child:
 - Custom vars set by the launcher (e.g., `HOME` for overlay mode)
 - `ELECTRON_RUN_AS_NODE` is explicitly removed (prevents Electron from running as Node.js)
 - `CURSOR_DATA_DIR` set for overlay mode (private `~/.cursor`)
+- Grok Bot clones only: `SAND_USER_DATA_DIR` (`Profiles/<id>/user-data`) and `SAND_DATA_ROOT` (`Profiles/<id>/data-root`). Grok Bot ignores `--user-data-dir` and takes the single-instance lock on the default user-data path, so a clone without these variables exits immediately when the main app is running. `SAND_DATA_ROOT` otherwise defaults to `~/.grokbot`, which every clone would share. The Dock wrapper and the in-app Launch button both exec the binary with this environment (`open -n -a "Grok Bot" --env` does not). Cursor, Claude, and ChatGPT do not get these variables.
 
 ## Arguments Preservation
 

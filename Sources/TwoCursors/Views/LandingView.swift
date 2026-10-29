@@ -132,15 +132,44 @@ struct BrandMarkView: View {
         )
     }
 
+    /// Loaded from `Contents/Resources`, never `Bundle.module`.
+    ///
+    /// SwiftPM's resource accessor for an executable target only looks for
+    /// `TwoCursors_TwoCursors.bundle` at `Bundle.main.bundleURL` (the `.app` root) and
+    /// `fatalError`s with `could not load resource bundle` when it is missing. The packaged
+    /// app keeps resources under `Contents/Resources`. Putting the bundle at the `.app` root
+    /// so that accessor succeeds also breaks the code signature. The accessor is not generated
+    /// at all: this target does not declare SwiftPM resources.
     private static let brandImage: NSImage? = {
-        if let url = Bundle.module.url(forResource: "BrandMark", withExtension: "png"),
-           let image = NSImage(contentsOf: url) {
-            return image
+        for url in brandMarkCandidates() {
+            if let image = NSImage(contentsOf: url) {
+                return image
+            }
         }
-        let fallback = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Resources/BrandMark.png")
-        return NSImage(contentsOf: fallback)
+        return nil
     }()
+
+    private static func brandMarkCandidates() -> [URL] {
+        var urls: [URL] = []
+        if let resource = Bundle.main.url(forResource: "BrandMark", withExtension: "png") {
+            urls.append(resource)
+        }
+        let bundle = Bundle.main.bundleURL
+        urls.append(bundle.appendingPathComponent("Contents/Resources/BrandMark.png"))
+        if let resources = Bundle.main.resourceURL {
+            urls.append(resources.appendingPathComponent("BrandMark.png"))
+        }
+        // `swift run` from a checkout: the PNG sits next to this target's sources.
+        // `#filePath` is the build machine's source path, so this misses on a packaged app
+        // and the Contents/Resources copies above are what launch uses.
+        urls.append(
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/BrandMark.png")
+        )
+        return urls
+    }
 }
 
 struct RecipeHubView: View {

@@ -23,9 +23,6 @@ let package = Package(
         .executableTarget(
             name: "TwoCursors",
             dependencies: ["TwoCursorsCore"],
-            resources: [
-                .process("Resources"),
-            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("SwiftUI"),

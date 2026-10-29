@@ -30,6 +30,10 @@ public struct ProfileLauncher {
 
         let wrapperURL = TwoCursorsPaths.wrappersDirectory(fileManager: fileManager)
             .appendingPathComponent(profile.wrapperFileName)
+        // Open the Dock wrapper, which execs the real binary with CloneLaunchEnvironment.
+        // That is what actually starts a Grok Bot clone: `open -n -a 'Grok Bot' --env` (and
+        // NSWorkspace's environment dictionary) does not reliably deliver SAND_USER_DATA_DIR
+        // / SAND_DATA_ROOT, so the in-app Launch button must not rely on them.
         if preferWrapper, fileManager.fileExists(atPath: wrapperURL.path) {
             let config = NSWorkspace.OpenConfiguration()
             // A cloned bundle is a real app: reopening it should focus the running copy.

@@ -110,6 +110,12 @@ struct ProfileDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 pathRow("User data", model.store.userDataURL(for: profile).path)
                 pathRow("Extensions", model.store.extensionsURL(for: profile).path)
+                if profile.recipeID == GrokRecipe().id {
+                    pathRow(
+                        "Grok data root",
+                        CloneLaunchEnvironment.grokDataRootURL(profile: profile, store: model.store).path
+                    )
+                }
                 if isolation == .fullHomeOverlay {
                     pathRow("Overlay HOME", model.store.overlayHomeURL(for: profile).path)
                 }
