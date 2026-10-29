@@ -26,7 +26,7 @@ fi
 APP="dist/Lots of Agents.app"
 ZIP="dist/Lots-of-Agents-notarize.zip"
 rm -f "$ZIP"
-ditto -c -k --keepParent "$APP" "$ZIP"
+COPYFILE_DISABLE=1 ditto -c -k --keepParent --norsrc "$APP" "$ZIP"
 
 echo "Submitting to notarytool…"
 xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait

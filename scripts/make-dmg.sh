@@ -16,7 +16,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$STAGE/$VOL"
-ditto "$APP" "$STAGE/$VOL/Lots of Agents.app"
+COPYFILE_DISABLE=1 ditto --norsrc "$APP" "$STAGE/$VOL/Lots of Agents.app"
 ln -s /Applications "$STAGE/$VOL/Applications"
 
 rm -f "$DMG"

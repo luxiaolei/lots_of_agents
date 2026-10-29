@@ -38,6 +38,7 @@ enum TwoCursorsTests {
         homeOverlayIsolatesChatGPTSupport()
         rasterizedOfficialIcons()
         chatGPTLaunchEnvironment()
+        grokLaunchEnvironment()
         chatGPTClonesBundle()
         parseFlags()
         ownProcessArgs()
@@ -374,8 +375,56 @@ enum TwoCursorsTests {
             check(env["CODEX_HOME"] == store.overlayHomeURL(for: profile).appendingPathComponent(".codex").path, "CODEX_HOME")
             check(env["CODEX_ELECTRON_USER_DATA_PATH"] == store.userDataURL(for: profile).path, "CODEX_ELECTRON_USER_DATA_PATH")
             check(env["HOME"] == store.overlayHomeURL(for: profile).path, "HOME is overlay")
+            check(env["SAND_USER_DATA_DIR"] == nil, "chatgpt does not set SAND_USER_DATA_DIR")
+            check(env["SAND_DATA_ROOT"] == nil, "chatgpt does not set SAND_DATA_ROOT")
         } catch {
             check(false, "chatGPTLaunchEnvironment \(error)")
+        }
+    }
+
+    static func grokLaunchEnvironment() {
+        do {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("tc-grok-env-\(UUID().uuidString)")
+            let store = try ProfileStore(root: root)
+            let profile = try store.create(name: "Personal", recipeID: "grok")
+            let env = try CloneLaunchEnvironment.make(
+                profile: profile,
+                store: store,
+                recipe: GrokRecipe(),
+                base: ["ELECTRON_RUN_AS_NODE": "1", "PATH": "/usr/bin", "HOME": "/Users/example"]
+            )
+            let userData = store.userDataURL(for: profile).path
+            let dataRoot = CloneLaunchEnvironment.grokDataRootURL(profile: profile, store: store).path
+            check(env["ELECTRON_RUN_AS_NODE"] == nil, "strips ELECTRON_RUN_AS_NODE")
+            check(env["SAND_USER_DATA_DIR"] == userData, "SAND_USER_DATA_DIR \(env["SAND_USER_DATA_DIR"] ?? "nil")")
+            check(env["SAND_DATA_ROOT"] == dataRoot, "SAND_DATA_ROOT \(env["SAND_DATA_ROOT"] ?? "nil")")
+            check(userData.hasSuffix("/Profiles/\(profile.id.uuidString)/user-data"), "user-data under profile: \(userData)")
+            check(dataRoot.hasSuffix("/Profiles/\(profile.id.uuidString)/data-root"), "data-root under profile: \(dataRoot)")
+            check(FileManager.default.fileExists(atPath: dataRoot), "data-root directory created")
+            check(env["HOME"] == "/Users/example", "grok userDataDir isolation keeps HOME")
+            check(!userData.contains(".grokbot"), "user-data is not ~/.grokbot")
+            check(!dataRoot.contains(".grokbot"), "data-root is not ~/.grokbot")
+
+            let exports = try CLIShimInstaller.exportLines(profile: profile, store: store, recipe: GrokRecipe())
+            check(exports.contains("export SAND_USER_DATA_DIR=\"\(userData)\""), "shim exports SAND_USER_DATA_DIR")
+            check(exports.contains("export SAND_DATA_ROOT=\"\(dataRoot)\""), "shim exports SAND_DATA_ROOT")
+
+            let others: [any AppRecipe] = [CursorRecipe(), ClaudeRecipe()]
+            for recipe in others {
+                let other = try store.create(name: recipe.displayName, recipeID: recipe.id)
+                let otherEnv = try CloneLaunchEnvironment.make(
+                    profile: other,
+                    store: store,
+                    recipe: recipe,
+                    base: ["PATH": "/usr/bin"]
+                )
+                check(otherEnv["SAND_USER_DATA_DIR"] == nil, "\(recipe.id) does not set SAND_USER_DATA_DIR")
+                check(otherEnv["SAND_DATA_ROOT"] == nil, "\(recipe.id) does not set SAND_DATA_ROOT")
+                let otherExports = try CLIShimInstaller.exportLines(profile: other, store: store, recipe: recipe)
+                check(!otherExports.contains(where: { $0.contains("SAND_") }), "\(recipe.id) shim has no SAND_ exports")
+            }
+        } catch {
+            check(false, "grokLaunchEnvironment \(error)")
         }
     }
 

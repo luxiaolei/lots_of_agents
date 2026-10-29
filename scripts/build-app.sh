@@ -4,6 +4,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Don't let copyfile(3) drop AppleDouble `._*` sidecars into the bundle. They
+# must not be sealed into the signature, and they must not ship in the zip.
+export COPYFILE_DISABLE=1
+
 PRODUCT_NAME="Lots of Agents"
 BUNDLE_ID="app.lotsofagents.macos"
 APP="dist/${PRODUCT_NAME}.app"
@@ -49,11 +53,13 @@ fi
 if [ -f Sources/TwoCursors/Resources/BrandMark.png ]; then
   cp Sources/TwoCursors/Resources/BrandMark.png "$APP/Contents/Resources/BrandMark.png"
 fi
-# Copy SPM resource bundle if present (BrandMark for SwiftUI)
-RES_BUNDLE="$(find .build -path '*/TwoCursors_TwoCursors.bundle' -type d 2>/dev/null | head -1 || true)"
-if [ -n "$RES_BUNDLE" ] && [ -d "$RES_BUNDLE" ]; then
-  cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
-fi
+# BrandMark and AppIcon are loaded from Contents/Resources via Bundle.main.
+# Do not copy TwoCursors_TwoCursors.bundle into the app. SwiftPM's executable
+# Bundle.module accessor looks for that bundle at the .app root and fatalErrors
+# when it is only under Contents/Resources. The app does not call Bundle.module.
+
+# AppleDouble files created by Finder or a Mac copy onto non-HFS volumes.
+find "$APP" \( -name '._*' -o -name '.DS_Store' \) -delete
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
