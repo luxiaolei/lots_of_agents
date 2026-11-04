@@ -56,7 +56,11 @@ enum TwoCursorsTests {
     static func chatGPTClonesBundle() {
         check(ChatGPTRecipe().clonesAppBundle, "ChatGPT clones get their own app bundle")
         check(ClaudeRecipe().clonesAppBundle, "Claude clones get their own app bundle")
-        check(GrokRecipe().clonesAppBundle, "Grok clones get their own app bundle")
+        check(!GrokRecipe().clonesAppBundle, "Grok clones exec the official binary, not a re-signed bundle copy")
+        check(GrokRecipe().launchesOfficialBinary, "Grok clones launch the official binary")
+        check(!CursorRecipe().launchesOfficialBinary, "Cursor keeps its bundle clone")
+        check(!ClaudeRecipe().launchesOfficialBinary, "Claude keeps its bundle clone")
+        check(!ChatGPTRecipe().launchesOfficialBinary, "ChatGPT keeps its bundle clone")
         check(CursorRecipe().clonesAppBundle, "Cursor clones get their own app bundle")
         check(BundleCloner.isTeamBoundEntitlement("keychain-access-groups"), "drops keychain groups")
         check(BundleCloner.isTeamBoundEntitlement("com.apple.developer.team-identifier"), "drops team ID")
@@ -409,6 +413,49 @@ enum TwoCursorsTests {
             check(exports.contains("export SAND_USER_DATA_DIR=\"\(userData)\""), "shim exports SAND_USER_DATA_DIR")
             check(exports.contains("export SAND_DATA_ROOT=\"\(dataRoot)\""), "shim exports SAND_DATA_ROOT")
 
+            let official = URL(fileURLWithPath: "/Applications/Grok Bot.app/Contents/MacOS/Grok Bot")
+            let script = try GrokCloneScript.source(profile: profile, store: store, officialExecutable: official)
+            check(script.hasPrefix("#!/bin/bash\n"), "grok wrapper is a shell script")
+            check(script.contains("export SAND_USER_DATA_DIR=\(GrokCloneScript.shellQuote(userData))"), "script exports user-data")
+            check(script.contains("export SAND_DATA_ROOT=\(GrokCloneScript.shellQuote(dataRoot))"), "script exports data-root")
+            check(script.contains("mkdir -p \(GrokCloneScript.shellQuote(userData)) \(GrokCloneScript.shellQuote(dataRoot))"), "script creates both dirs")
+            check(script.contains("exec \"$GROK\" \"$@\""), "script execs the official binary")
+            check(!script.contains("--user-data-dir"), "script does not pass --user-data-dir")
+            check(!script.contains("--use-mock-keychain"), "script does not pass --use-mock-keychain")
+            check(script.contains(GrokCloneScript.shellQuote(official.path)), "script records the official executable")
+            check(GrokCloneScript.shellQuote("/Users/o'brien/Application Support") == "'/Users/o'\\''brien/Application Support'", "shell quote")
+            check(GrokCloneScript.wrapperIsCurrent(
+                executableName: GrokCloneScript.executableName,
+                scriptSource: script,
+                revision: GrokCloneScript.revision
+            ), "fresh script wrapper is current")
+            check(!GrokCloneScript.wrapperIsCurrent(
+                executableName: "TwoCursorsLauncher",
+                scriptSource: script,
+                revision: GrokCloneScript.revision
+            ), "TwoCursorsLauncher grok wrapper is stale")
+            check(!GrokCloneScript.wrapperIsCurrent(
+                executableName: GrokCloneScript.executableName,
+                scriptSource: script,
+                revision: nil
+            ), "hand-patched script without revision is rebuilt")
+
+            let rendered = try CLIShimInstaller.render(
+                profile: profile,
+                store: store,
+                recipe: GrokRecipe(),
+                executable: official
+            )
+            check(rendered == script, "cli shim matches the dock script")
+            let cursorShim = try CLIShimInstaller.render(
+                profile: try store.create(name: "Cursor Work", recipeID: "cursor"),
+                store: store,
+                recipe: CursorRecipe(),
+                executable: URL(fileURLWithPath: "/Applications/Cursor.app/Contents/MacOS/Cursor")
+            )
+            check(cursorShim.contains("--user-data-dir="), "cursor shim still passes --user-data-dir")
+            check(!cursorShim.contains("SAND_USER_DATA_DIR"), "cursor shim has no SAND_USER_DATA_DIR")
+
             let others: [any AppRecipe] = [CursorRecipe(), ClaudeRecipe()]
             for recipe in others {
                 let other = try store.create(name: recipe.displayName, recipeID: recipe.id)
@@ -437,6 +484,18 @@ enum TwoCursorsTests {
     static func ownProcessArgs() {
         let args = ProcessArguments.arguments(for: ProcessInfo.processInfo.processIdentifier)
         check(!args.isEmpty, "KERN_PROCARGS2 should return argv")
+        let env = ProcessArguments.environment(for: ProcessInfo.processInfo.processIdentifier)
+        check(env["PATH"] != nil || env["HOME"] != nil, "KERN_PROCARGS2 should include the environment")
+        let fromArg = ProcessArguments.isolatedUserDataDir(in: ProcessArguments.Snapshot(
+            arguments: ["Grok Bot", "--user-data-dir=/tmp/a"],
+            environment: ["SAND_USER_DATA_DIR": "/tmp/b"]
+        ))
+        check(fromArg == "/tmp/a", "argv user-data-dir still identifies Cursor/Claude/ChatGPT")
+        let fromEnv = ProcessArguments.isolatedUserDataDir(in: ProcessArguments.Snapshot(
+            arguments: ["Grok Bot"],
+            environment: ["SAND_USER_DATA_DIR": "/tmp/b"]
+        ))
+        check(fromEnv == "/tmp/b", "grok clone is identified by SAND_USER_DATA_DIR")
     }
 
     static func writeICNS() {
@@ -519,7 +578,11 @@ enum TwoCursorsTests {
         check(recipe.urlSchemes == ["sand"], "scheme")
         check(!recipe.seedsMarketplace, "no marketplace")
         check(recipe.seedsUpdateDisabled, "grok may seed update.mode")
-        check(recipe.supportsUserDataDir, "electron flags")
+        check(!recipe.supportsUserDataDir, "grok does not take --user-data-dir")
+        check(recipe.launchArguments(
+            userData: URL(fileURLWithPath: "/tmp/user-data"),
+            extensions: URL(fileURLWithPath: "/tmp/extensions")
+        ).isEmpty, "grok launch arguments stay empty")
         check(RecipeRegistry.all.first?.id == "grok", "grok is primary recipe")
         check(RecipeRegistry.all.contains { $0.id == "cursor" }, "cursor still registered")
         check(RecipeRegistry.all.contains { $0.id == "claude" }, "claude registered")

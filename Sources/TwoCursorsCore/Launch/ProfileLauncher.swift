@@ -30,10 +30,9 @@ public struct ProfileLauncher {
 
         let wrapperURL = TwoCursorsPaths.wrappersDirectory(fileManager: fileManager)
             .appendingPathComponent(profile.wrapperFileName)
-        // Open the Dock wrapper, which execs the real binary with CloneLaunchEnvironment.
-        // That is what actually starts a Grok Bot clone: `open -n -a 'Grok Bot' --env` (and
-        // NSWorkspace's environment dictionary) does not reliably deliver SAND_USER_DATA_DIR
-        // / SAND_DATA_ROOT, so the in-app Launch button must not rely on them.
+        // Open the Dock wrapper. For Grok Bot that wrapper is `grokbot-clone.sh`, which execs
+        // the official binary with SAND_USER_DATA_DIR / SAND_DATA_ROOT. `open -n -a 'Grok Bot'
+        // --env` (and NSWorkspace's environment dictionary) does not reliably deliver them.
         if preferWrapper, fileManager.fileExists(atPath: wrapperURL.path) {
             let config = NSWorkspace.OpenConfiguration()
             // A cloned bundle is a real app: reopening it should focus the running copy.
@@ -75,13 +74,12 @@ public struct ProfileLauncher {
     }
 
     public func quit(profile: Profile, store: ProfileStore) {
-        let userData = store.userDataURL(for: profile).path
+        let userData = store.userDataURL(for: profile).resolvingSymlinksInPath()
         let running = NSWorkspace.shared.runningApplications
         for app in running {
-            let args = ProcessArguments.arguments(for: app.processIdentifier)
-            guard let dir = ProcessArguments.userDataDir(from: args) else { continue }
-            if URL(fileURLWithPath: dir).resolvingSymlinksInPath()
-                == URL(fileURLWithPath: userData).resolvingSymlinksInPath() {
+            let snapshot = ProcessArguments.snapshot(for: app.processIdentifier)
+            guard let dir = ProcessArguments.isolatedUserDataDir(in: snapshot) else { continue }
+            if URL(fileURLWithPath: dir).resolvingSymlinksInPath() == userData {
                 app.terminate()
             }
         }
@@ -107,8 +105,8 @@ public enum RunningCloneDetector {
         let apps = applications ?? WorkspaceRunningApps().runningApplications()
         var live: Set<UUID> = []
         for app in apps {
-            let args = ProcessArguments.arguments(for: app.processIdentifier)
-            guard let dir = ProcessArguments.userDataDir(from: args) else { continue }
+            let snapshot = ProcessArguments.snapshot(for: app.processIdentifier)
+            guard let dir = ProcessArguments.isolatedUserDataDir(in: snapshot) else { continue }
             let standardized = URL(fileURLWithPath: dir).resolvingSymlinksInPath()
             for profile in profiles {
                 let expected = store.userDataURL(for: profile).resolvingSymlinksInPath()

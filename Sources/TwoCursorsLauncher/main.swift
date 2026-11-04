@@ -9,6 +9,18 @@ enum TwoCursorsLauncherMain {
 
     static func main() {
         upgradeFromLotsOfAgentsIfNeeded()
+        // Grok Bot clones are `grokbot-clone.sh`. An older wrapper still has this Mach-O as
+        // CFBundleExecutable; replace it with the script, then exec the official binary.
+        // Do this before the bundle-clone path: that path execs a re-signed copy, which Grok
+        // treats as the default instance and exits.
+        if let (_, _, recipe) = try? loadProfile(), recipe.launchesOfficialBinary {
+            do {
+                try execOfficialBinaryClone()
+            } catch {
+                FileHandle.standardError.write(Data("Lots of Agents launcher: \(error.localizedDescription)\n".utf8))
+                exit(1)
+            }
+        }
         let info = Bundle.main.infoDictionary ?? [:]
         let recipeID = info["TwoCursorsRecipeID"] as? String ?? ""
         // Old-style wrappers for a cloning recipe convert themselves on first launch.
@@ -50,9 +62,45 @@ enum TwoCursorsLauncherMain {
         guard info?[WrapperAppBuilder.launcherStampKey] as? String == WrapperAppBuilder.launcherStamp(managerLauncher) else {
             return // rebuild was skipped (e.g. clone already running); carry on with this copy
         }
-        let launcher = rebuilt.appendingPathComponent("Contents/MacOS/TwoCursorsLauncher").path
-        var argv = ([launcher] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
-        execv(launcher, &argv)
+        let execName = (info?["CFBundleExecutable"] as? String) ?? "TwoCursorsLauncher"
+        let executable = rebuilt.appendingPathComponent("Contents/MacOS").appendingPathComponent(execName).path
+        guard FileManager.default.isExecutableFile(atPath: executable) else { return }
+        var argv = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
+        execv(executable, &argv)
+    }
+
+    /// Grok Bot: rebuild the Dock app as `grokbot-clone.sh` and exec it. If that wrapper cannot
+    /// be written, exec the official binary directly with the same environment and no
+    /// `--user-data-dir` / `--use-mock-keychain` (those belong to the bundle-clone path).
+    static func execOfficialBinaryClone() throws -> Never {
+        let (profile, store, recipe) = try loadProfile()
+        guard recipe.id == GrokRecipe().id else {
+            throw TwoCursorsError.launchFailed("No official-binary launcher for \(recipe.displayName).")
+        }
+        if let launcher = Bundle.main.executableURL,
+           let rebuilt = try? WrapperAppBuilder().install(profile: profile, store: store, launcherBinary: launcher) {
+            let script = rebuilt
+                .appendingPathComponent("Contents/MacOS")
+                .appendingPathComponent(GrokCloneScript.executableName)
+                .path
+            if FileManager.default.isExecutableFile(atPath: script) {
+                var argv = ([script] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
+                execv(script, &argv)
+            }
+        }
+
+        let status = recipe.detect(using: InstalledAppDetector())
+        guard let executable = status.executableURL, status.isInstalled else {
+            throw TwoCursorsError.appNotInstalled(recipe.displayName)
+        }
+        try store.prepareDirectories(for: profile)
+        try CloneLaunchEnvironment.seedIfNeeded(recipe: recipe, profile: profile, store: store)
+        let env = try CloneLaunchEnvironment.make(profile: profile, store: store, recipe: recipe)
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        var argv = ([executable.path] + arguments).map { strdup($0) } + [nil]
+        var envp = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        execve(executable.path, &argv, &envp)
+        throw TwoCursorsError.launchFailed("execve failed: \(String(cString: strerror(errno)))")
     }
 
     static func applyWrapperIcon() {

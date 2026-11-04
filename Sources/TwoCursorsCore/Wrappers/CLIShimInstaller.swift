@@ -14,20 +14,26 @@ public struct CLIShimInstaller {
         let bin = TwoCursorsPaths.cliBin(fileManager: fileManager)
         try fileManager.createDirectory(at: bin, withIntermediateDirectories: true)
         let shim = bin.appendingPathComponent(profile.cliShimName)
-        let userData = store.userDataURL(for: profile).path
-        let extensions = store.extensionsURL(for: profile).path
-        let exports = try Self.exportLines(profile: profile, store: store, recipe: recipe)
-        let exportBlock = exports.isEmpty ? "" : exports.joined(separator: "\n") + "\n"
-        let grokPrep = recipe.id == GrokRecipe().id
-            ? "mkdir -p \"$SAND_USER_DATA_DIR\" \"$SAND_DATA_ROOT\" || exit 1\n"
-            : ""
-        let script = """
-        #!/bin/sh
-        \(exportBlock)\(grokPrep)exec "\(executable.path)" --user-data-dir="\(userData)" --extensions-dir="\(extensions)" "$@"
-        """
+        let script = try Self.render(profile: profile, store: store, recipe: recipe, executable: executable)
         try script.write(to: shim, atomically: true, encoding: .utf8)
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
         return shim
+    }
+
+    /// Shell script for a clone. Grok Bot execs the official binary with `SAND_*` and no
+    /// `--user-data-dir` (that flag does not isolate it). Other recipes keep the Chromium flags.
+    public static func render(profile: Profile, store: ProfileStore, recipe: any AppRecipe, executable: URL) throws -> String {
+        if recipe.id == GrokRecipe().id {
+            return try GrokCloneScript.source(profile: profile, store: store, officialExecutable: executable)
+        }
+        let userData = store.userDataURL(for: profile).path
+        let extensions = store.extensionsURL(for: profile).path
+        let exports = try exportLines(profile: profile, store: store, recipe: recipe)
+        let exportBlock = exports.isEmpty ? "" : exports.joined(separator: "\n") + "\n"
+        return """
+        #!/bin/sh
+        \(exportBlock)exec "\(executable.path)" --user-data-dir="\(userData)" --extensions-dir="\(extensions)" "$@"
+        """
     }
 
     /// Shell `export` lines for a clone. Grok Bot also creates its isolated directories.

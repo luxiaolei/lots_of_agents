@@ -28,7 +28,7 @@ Do **not** lead the first Reddit post with Cursor.
 
 Grok Bot has no account switcher, so work Ultra and personal SuperGrok Heavy cannot stay signed in on one Mac.
 
-I built an open-source macOS app, Lots of Agents, that launches the same `/Applications/Grok Bot.app` (bundle ID `com.anysphere.sand`) with `--user-data-dir` / `--extensions-dir`. Two Dock apps, two logins, one binary — update Grok Bot once and both clones pick it up. Sign-in mode pauses the other Grok clone so `sand://` hits the one you are authorizing. Git and SSH still use your real home (not a fake empty `$HOME`).
+I built an open-source macOS app, Lots of Agents, that launches the same `/Applications/Grok Bot.app` (bundle ID `com.anysphere.sand`) with `SAND_USER_DATA_DIR` / `SAND_DATA_ROOT` (Grok Bot ignores `--user-data-dir`). Two Dock apps, two logins, one binary — update Grok Bot once and both clones pick it up. Sign-in mode pauses the other Grok clone so `sand://` hits the one you are authorizing. Git and SSH still use your real home (not a fake empty `$HOME`).
 
 Not affiliated with Anysphere or xAI. Cursor IDE clones are also supported.
 
