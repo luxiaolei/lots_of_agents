@@ -36,14 +36,16 @@ Recipes with `clonesAppBundle = true` (Cursor, Claude, ChatGPT) instead get a re
 
 ## Structure
 
-Grok Bot is the exception. Its wrapper executable is `grokbot-clone.sh`, not `TwoCursorsLauncher`:
+Grok Bot is the exception. Its wrapper is an APFS clone of the official app. The Dock executable is still `grokbot-clone.sh`, and that script execs the clone's own `Grok Bot` binary so the process is not `/Applications/Grok Bot.app`:
 
 ```
 ~/Applications/Grok Bot Personal.app/
 ├── Contents/
-│   ├── Info.plist                      # CFBundleExecutable = grokbot-clone.sh
+│   ├── Info.plist                      # clone bundle id, CFBundleExecutable = grokbot-clone.sh
 │   ├── MacOS/
-│   │   └── grokbot-clone.sh            # exports SAND_* and execs /Applications/Grok Bot.app
+│   │   ├── grokbot-clone.sh            # exports SAND_* then execs ./Grok Bot
+│   │   └── Grok Bot                    # ad-hoc-signed copy of the official mach-o
+│   ├── Frameworks/                     # cloned; ShipIt removed
 │   └── Resources/
 │       └── AppIcon.icns               # Custom tinted icon
 ```
@@ -216,7 +218,7 @@ All environment variables are passed through to the child:
 - Custom vars set by the launcher (e.g., `HOME` for overlay mode)
 - `ELECTRON_RUN_AS_NODE` is explicitly removed (prevents Electron from running as Node.js)
 - `CURSOR_DATA_DIR` set for overlay mode (private `~/.cursor`)
-- Grok Bot clones do not use this launcher. Their Dock app executable is `grokbot-clone.sh`, which exports `SAND_USER_DATA_DIR` (`Profiles/<id>/user-data`) and `SAND_DATA_ROOT` (`Profiles/<id>/data-root`) and execs the official signed `Grok Bot` binary. Grok Bot ignores `--user-data-dir` and takes the single-instance lock on the default profile, so a `TwoCursorsLauncher` wrapper that execs a re-signed bundle copy exits immediately. `SAND_DATA_ROOT` otherwise defaults to `~/.grokbot`, which every clone would share. Cursor, Claude, and ChatGPT do not get these variables and still use the bundle clone above.
+- Grok Bot clones do not use this launcher. Their Dock app executable is `grokbot-clone.sh`, which exports `SAND_USER_DATA_DIR` (`Profiles/<id>/user-data`) and `SAND_DATA_ROOT` (`Profiles/<id>/data-root`) and execs the `Grok Bot` mach-o inside the wrapper. Execing `/Applications/Grok Bot.app` instead makes every clone the primary app: the Dock focuses that clone, and ShipIt aborts with code -9 while it is running. Cursor, Claude, and ChatGPT do not get these variables and still use TwoCursorsLauncher.
 
 ## Arguments Preservation
 

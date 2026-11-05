@@ -24,7 +24,16 @@ public struct CLIShimInstaller {
     /// `--user-data-dir` (that flag does not isolate it). Other recipes keep the Chromium flags.
     public static func render(profile: Profile, store: ProfileStore, recipe: any AppRecipe, executable: URL) throws -> String {
         if recipe.id == GrokRecipe().id {
-            return try GrokCloneScript.source(profile: profile, store: store, officialExecutable: executable)
+            let wrapperBinary = TwoCursorsPaths.wrappersDirectory(fileManager: store.fileManager)
+                .appendingPathComponent(profile.wrapperFileName)
+                .appendingPathComponent("Contents/MacOS")
+                .appendingPathComponent(recipe.executableName)
+            return try GrokCloneScript.shimSource(
+                profile: profile,
+                store: store,
+                wrapperExecutable: wrapperBinary,
+                officialExecutable: executable
+            )
         }
         let userData = store.userDataURL(for: profile).path
         let extensions = store.extensionsURL(for: profile).path

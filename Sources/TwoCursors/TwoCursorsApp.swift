@@ -72,7 +72,23 @@ final class AppModel: ObservableObject {
 
     func openPrimary(_ recipeID: String) {
         guard let url = status(for: recipeID).appURL else { return }
+        if recipeID == GrokRecipe().id {
+            launcher.openGrokPrimary(appURL: url)
+            return
+        }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Quits clones and the primary so ShipIt can replace `/Applications/Grok Bot.app`.
+    /// A normal quit goes out first; anything still alive is force-quit shortly after.
+    func quitAllGrokInstances() {
+        guard let url = grok.appURL else { return }
+        launcher.quitAllGrokInstances(officialAppURL: url, force: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self else { return }
+            self.launcher.quitAllGrokInstances(officialAppURL: url, force: true)
+            self.refresh()
+        }
     }
 
     func status(for recipeID: String) -> AppStatus {

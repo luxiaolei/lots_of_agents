@@ -8,6 +8,7 @@ import TwoCursorsCore
 struct PrimaryInstallView: View {
     @EnvironmentObject private var model: AppModel
     var recipeID: String
+    @State private var confirmingGrokQuit = false
 
     private var recipe: (any AppRecipe)? { RecipeRegistry.recipe(id: recipeID) }
     private var status: AppStatus { model.status(for: recipeID) }
@@ -48,6 +49,11 @@ struct PrimaryInstallView: View {
                         Text("Clones are built from this app and pick up its updates the next time they open. Keep this app updated to update every clone.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if recipeID == GrokRecipe().id {
+                            Text("Grok’s updater (ShipIt) will not replace this app while any process is still running from it. Quit every instance, open the primary, and update before launching clones again.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(8)
                 }
@@ -85,8 +91,23 @@ struct PrimaryInstallView: View {
             if let url = status.appURL {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             }
+            if recipeID == GrokRecipe().id {
+                Button("Quit all instances") { confirmingGrokQuit = true }
+                    .disabled(!status.isInstalled)
+                    .help("Quits every Grok Bot clone and the primary so an update can replace the app.")
+            }
             Spacer()
             Button("New Clone") { model.openCreate(recipeID: recipeID) }
+        }
+        .confirmationDialog(
+            "Quit every Grok Bot instance?",
+            isPresented: $confirmingGrokQuit,
+            titleVisibility: .visible
+        ) {
+            Button("Quit clones and primary", role: .destructive) { model.quitAllGrokInstances() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("ShipIt cannot replace Grok Bot.app while a clone or the primary is still running from that app. Open the primary afterward and update before launching clones.")
         }
     }
 }

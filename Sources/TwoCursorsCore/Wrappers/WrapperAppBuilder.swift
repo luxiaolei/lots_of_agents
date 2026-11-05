@@ -162,8 +162,8 @@ public struct WrapperAppBuilder {
         Self.refreshLaunchServices(for: dest)
     }
 
-    /// Thin, ad-hoc-signed Dock app whose executable is `grokbot-clone.sh`.
-    /// Replaces an older full-bundle clone (`CFBundleExecutable` = `TwoCursorsLauncher`) in place.
+    /// APFS clone of Grok Bot whose executable is `grokbot-clone.sh`.
+    /// Replaces a thin script wrapper or an older TwoCursorsLauncher clone in place.
     private func writeGrokScriptBundle(
         profile: Profile,
         store: ProfileStore,
@@ -177,62 +177,29 @@ public struct WrapperAppBuilder {
             return
         }
         let status = recipe.detect(using: InstalledAppDetector())
-        guard status.isInstalled, let executable = status.executableURL else {
+        guard status.isInstalled, let source = status.appURL, let executable = status.executableURL else {
             throw TwoCursorsError.appNotInstalled(recipe.displayName)
         }
-
-        let parent = dest.deletingLastPathComponent()
-        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-        let staging = parent.appendingPathComponent(".\(dest.lastPathComponent).building-\(UUID().uuidString)")
-        defer { try? fileManager.removeItem(at: staging) }
-
-        let contents = staging.appendingPathComponent("Contents")
-        let macos = contents.appendingPathComponent("MacOS")
-        let resources = contents.appendingPathComponent("Resources")
-        try fileManager.createDirectory(at: macos, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: resources, withIntermediateDirectories: true)
-
-        let scriptURL = macos.appendingPathComponent(GrokCloneScript.executableName)
-        let script = try GrokCloneScript.source(profile: profile, store: store, officialExecutable: executable)
-        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-
+        let script = try GrokCloneScript.wrapperSource(profile: profile, store: store, officialExecutable: executable)
         let base = IconComposer.baseIcon(for: profile.recipeID)
-        try IconComposer.writeICNS(spec: profile.icon, to: resources.appendingPathComponent("AppIcon.icns"), base: base)
         try IconComposer.writeICNS(spec: profile.icon, to: store.iconURL(for: profile), base: base)
-
-        let plist: [String: Any] = [
-            "CFBundleDevelopmentRegion": "en",
-            "CFBundleExecutable": GrokCloneScript.executableName,
-            "CFBundleIconFile": "AppIcon",
-            "CFBundleIdentifier": profile.wrapperBundleIdentifier,
-            "CFBundleInfoDictionaryVersion": "6.0",
-            "CFBundleName": profile.wrapperDisplayName,
-            "CFBundleDisplayName": profile.wrapperDisplayName,
-            "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "1.0",
-            "CFBundleVersion": "1",
-            "LSMinimumSystemVersion": "14.0",
-            "NSHighResolutionCapable": true,
-            "LSUIElement": false,
-            "TwoCursorsProfileID": profile.id.uuidString,
-            "TwoCursorsRecipeID": profile.recipeID,
-            "TwoCursorsCatalog": store.catalogURL.path,
-            GrokCloneScript.revisionKey: GrokCloneScript.revision,
-            Self.launcherStampKey: Self.launcherStamp(launcherBinary),
-        ]
-        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try data.write(to: contents.appendingPathComponent("Info.plist"), options: .atomic)
-
-        if fileManager.fileExists(atPath: dest.path) {
-            try fileManager.removeItem(at: dest)
-        }
-        try fileManager.moveItem(at: staging, to: dest)
-        // Quarantine and FinderInfo have to come off before the ad-hoc signature,
-        // or Gatekeeper treats the wrapper as unsigned and the process quits on open.
-        clearQuarantine(dest)
+        try BundleCloner(fileManager: fileManager).buildScriptHost(
+            source: source,
+            dest: dest,
+            bundleIdentifier: profile.wrapperBundleIdentifier,
+            displayName: profile.wrapperDisplayName,
+            scriptName: GrokCloneScript.executableName,
+            scriptBody: script,
+            writeIcon: { try IconComposer.writeICNS(spec: profile.icon, to: $0, base: base) },
+            extraInfo: [
+                "TwoCursorsProfileID": profile.id.uuidString,
+                "TwoCursorsRecipeID": profile.recipeID,
+                "TwoCursorsCatalog": store.catalogURL.path,
+                GrokCloneScript.revisionKey: GrokCloneScript.revision,
+                Self.launcherStampKey: Self.launcherStamp(launcherBinary),
+            ]
+        )
         IconComposer.removeCustomIconOverride(from: dest, fileManager: fileManager)
-        adHocSign(dest)
         touch(dest)
         Self.refreshLaunchServices(for: dest)
     }
@@ -297,16 +264,6 @@ public struct WrapperAppBuilder {
             return sibling
         }
         return nil
-    }
-
-    private func clearQuarantine(_ url: URL) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        process.arguments = ["-cr", url.path]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        try? process.run()
-        process.waitUntilExit()
     }
 
     private func adHocSign(_ app: URL) {

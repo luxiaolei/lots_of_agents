@@ -16,9 +16,9 @@ public struct GrokRecipe: AppRecipe {
     public let supportsUserDataDir = false
     public let downloadURL = URL(string: "https://cursor.com/bot/onboarding")!
 
-    /// Not a bundle clone. The Dock app is `grokbot-clone.sh`, which execs the official signed
-    /// binary with `SAND_USER_DATA_DIR` / `SAND_DATA_ROOT`. A re-signed copy of Grok Bot.app
-    /// (the Cursor / Claude / ChatGPT approach) quits immediately.
+    /// Not a Cursor-style TwoCursorsLauncher clone. The Dock app is an APFS copy whose
+    /// executable is `grokbot-clone.sh`. The script sets `SAND_*` and execs that copy's own
+    /// `Grok Bot` binary, so the process is not the official bundle.
     public let clonesAppBundle = false
     public let launchesOfficialBinary = true
 
