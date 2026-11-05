@@ -28,13 +28,13 @@ public enum CloneLaunchEnvironment {
             env["CODEX_ELECTRON_USER_DATA_PATH"] = store.userDataURL(for: profile).path
         }
         if recipe.id == GrokRecipe().id {
-            // Grok Bot ignores `--user-data-dir` and resets its user-data path before Electron's
-            // single-instance lock, so a clone started with only that flag sees the main instance
-            // and exits 0. It honors these instead (`[sand] using isolated user-data dir`).
+            // Grok Bot ignores `--user-data-dir` and takes its single-instance lock on the default
+            // profile, so a clone started that way (or by execing a re-signed bundle copy) sees the
+            // running app and exits 0. It honors these instead (`[sand] using isolated user-data dir`).
             // `SAND_DATA_ROOT` defaults to ~/.grokbot (machine credentials / daemon files); leave
             // it unset and every clone shares the main app's data root.
-            // `open -n -a 'Grok Bot' --env …` does not apply them reliably. Callers must exec the
-            // binary with this environment (the Dock wrapper does).
+            // The Dock wrapper is `grokbot-clone.sh`, which exports both and execs the official
+            // signed binary. `open -n -a 'Grok Bot' --env …` does not apply them reliably.
             let isolated = try prepareGrokIsolation(profile: profile, store: store)
             env[grokUserDataEnvironmentKey] = isolated.userData.path
             env[grokDataRootEnvironmentKey] = isolated.dataRoot.path

@@ -30,14 +30,19 @@ public struct ProfileLauncher {
 
         let wrapperURL = TwoCursorsPaths.wrappersDirectory(fileManager: fileManager)
             .appendingPathComponent(profile.wrapperFileName)
-        // Open the Dock wrapper, which execs the real binary with CloneLaunchEnvironment.
-        // That is what actually starts a Grok Bot clone: `open -n -a 'Grok Bot' --env` (and
-        // NSWorkspace's environment dictionary) does not reliably deliver SAND_USER_DATA_DIR
-        // / SAND_DATA_ROOT, so the in-app Launch button must not rely on them.
+        // Open the Dock wrapper. Grok's `grokbot-clone.sh` exports SAND_* and execs the binary
+        // inside the wrapper, so this bundle — not `/Applications/Grok Bot.app` — is the running
+        // app. `open -n -a 'Grok Bot' --env` does not deliver those variables.
         if preferWrapper, fileManager.fileExists(atPath: wrapperURL.path) {
+            if recipe.id == GrokRecipe().id {
+                for scheme in recipe.urlSchemes {
+                    LSSetDefaultHandlerForURLScheme(scheme as CFString, profile.wrapperBundleIdentifier as CFString)
+                }
+            }
             let config = NSWorkspace.OpenConfiguration()
-            // A cloned bundle is a real app: reopening it should focus the running copy.
-            config.createsNewApplicationInstance = !recipe.clonesAppBundle
+            // A real bundle (Grok script host, or a Cursor/Claude/ChatGPT clone) should focus
+            // the running copy. Only a thin wrapper that exits needs a brand-new instance.
+            config.createsNewApplicationInstance = !(recipe.clonesAppBundle || recipe.launchesOfficialBinary)
             config.activates = true
             workspace.openApplication(at: wrapperURL, configuration: config) { _, error in
                 if let error {
@@ -75,13 +80,12 @@ public struct ProfileLauncher {
     }
 
     public func quit(profile: Profile, store: ProfileStore) {
-        let userData = store.userDataURL(for: profile).path
+        let userData = store.userDataURL(for: profile).resolvingSymlinksInPath()
         let running = NSWorkspace.shared.runningApplications
         for app in running {
-            let args = ProcessArguments.arguments(for: app.processIdentifier)
-            guard let dir = ProcessArguments.userDataDir(from: args) else { continue }
-            if URL(fileURLWithPath: dir).resolvingSymlinksInPath()
-                == URL(fileURLWithPath: userData).resolvingSymlinksInPath() {
+            let snapshot = ProcessArguments.snapshot(for: app.processIdentifier)
+            guard let dir = ProcessArguments.isolatedUserDataDir(in: snapshot) else { continue }
+            if URL(fileURLWithPath: dir).resolvingSymlinksInPath() == userData {
                 app.terminate()
             }
         }
@@ -96,6 +100,51 @@ public struct ProfileLauncher {
         config.activates = true
         workspace.openApplication(at: appURL, configuration: config)
     }
+
+    /// Opens the official Grok Bot even when clones are running.
+    ///
+    /// Clones that still `exec` the official binary wear its bundle id, so a plain `open` only
+    /// focuses them. `createsNewApplicationInstance` starts the default-profile primary beside them.
+    /// After wrappers are rebuilt, clones have their own bundle and a plain open is enough.
+    public func openGrokPrimary(appURL: URL) {
+        LSSetDefaultHandlerForURLScheme("sand" as CFString, GrokRecipe.bundleIdentifier as CFString)
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        config.createsNewApplicationInstance = GrokInstances.shouldForceNewPrimary(
+            officialAppURL: appURL,
+            processes: grokProcesses()
+        )
+        workspace.openApplication(at: appURL, configuration: config)
+    }
+
+    /// Quits every process ShipIt would treat as Grok Bot.app, plus clone wrappers.
+    /// `force` is SIGKILL, used after a normal quit did not exit.
+    public func quitAllGrokInstances(officialAppURL: URL, force: Bool) {
+        for app in workspace.runningApplications {
+            let environment = ProcessArguments.environment(for: app.processIdentifier)
+            guard GrokInstances.shouldQuitForUpdate(
+                bundleIdentifier: app.bundleIdentifier,
+                bundleURL: app.bundleURL,
+                environment: environment,
+                officialAppURL: officialAppURL
+            ) else { continue }
+            if force {
+                app.forceTerminate()
+            } else {
+                app.terminate()
+            }
+        }
+    }
+
+    private func grokProcesses() -> [GrokInstances.Process] {
+        workspace.runningApplications.map { app in
+            GrokInstances.Process(
+                bundleIdentifier: app.bundleIdentifier,
+                bundleURL: app.bundleURL,
+                environment: ProcessArguments.environment(for: app.processIdentifier)
+            )
+        }
+    }
 }
 
 public enum RunningCloneDetector {
@@ -107,8 +156,8 @@ public enum RunningCloneDetector {
         let apps = applications ?? WorkspaceRunningApps().runningApplications()
         var live: Set<UUID> = []
         for app in apps {
-            let args = ProcessArguments.arguments(for: app.processIdentifier)
-            guard let dir = ProcessArguments.userDataDir(from: args) else { continue }
+            let snapshot = ProcessArguments.snapshot(for: app.processIdentifier)
+            guard let dir = ProcessArguments.isolatedUserDataDir(in: snapshot) else { continue }
             let standardized = URL(fileURLWithPath: dir).resolvingSymlinksInPath()
             for profile in profiles {
                 let expected = store.userDataURL(for: profile).resolvingSymlinksInPath()

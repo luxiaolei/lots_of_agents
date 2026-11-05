@@ -39,6 +39,7 @@ enum TwoCursorsTests {
         rasterizedOfficialIcons()
         chatGPTLaunchEnvironment()
         grokLaunchEnvironment()
+        grokPrimaryAndShipIt()
         chatGPTClonesBundle()
         parseFlags()
         ownProcessArgs()
@@ -56,7 +57,11 @@ enum TwoCursorsTests {
     static func chatGPTClonesBundle() {
         check(ChatGPTRecipe().clonesAppBundle, "ChatGPT clones get their own app bundle")
         check(ClaudeRecipe().clonesAppBundle, "Claude clones get their own app bundle")
-        check(GrokRecipe().clonesAppBundle, "Grok clones get their own app bundle")
+        check(!GrokRecipe().clonesAppBundle, "Grok clones exec the official binary, not a re-signed bundle copy")
+        check(GrokRecipe().launchesOfficialBinary, "Grok clones launch the official binary")
+        check(!CursorRecipe().launchesOfficialBinary, "Cursor keeps its bundle clone")
+        check(!ClaudeRecipe().launchesOfficialBinary, "Claude keeps its bundle clone")
+        check(!ChatGPTRecipe().launchesOfficialBinary, "ChatGPT keeps its bundle clone")
         check(CursorRecipe().clonesAppBundle, "Cursor clones get their own app bundle")
         check(BundleCloner.isTeamBoundEntitlement("keychain-access-groups"), "drops keychain groups")
         check(BundleCloner.isTeamBoundEntitlement("com.apple.developer.team-identifier"), "drops team ID")
@@ -79,6 +84,18 @@ enum TwoCursorsTests {
         check(plist["CFBundleIdentifier"] as? String == "app.lotsofagents.clone.chatgpt.work", "clone bundle ID")
         check(plist["CFBundleName"] as? String == "ChatGPT Work", "clone name")
         check(plist["CFBundleExecutable"] as? String == "TwoCursorsLauncher", "launcher is main executable")
+        let grokPlist = BundleCloner.cloneInfoPlist(
+            source: ["CFBundleExecutable": "Grok Bot", "CFBundleName": "Grok Bot"],
+            bundleIdentifier: "app.lotsofagents.clone.grok.hz",
+            displayName: "Grok Bot HZ",
+            keepsBundleName: true,
+            executableName: GrokCloneScript.executableName,
+            extra: [GrokCloneScript.revisionKey: GrokCloneScript.revision]
+        )
+        check(grokPlist["CFBundleExecutable"] as? String == "grokbot-clone.sh", "grok dock executable stays the script")
+        check(grokPlist[BundleCloner.realExecutableKey] as? String == "Grok Bot", "grok clone keeps the mach-o name")
+        check(grokPlist["CFBundleName"] as? String == "Grok Bot", "grok helper lookup keeps CFBundleName")
+        check(grokPlist[GrokCloneScript.revisionKey] as? String == "2", "grok script revision")
         check(plist[BundleCloner.realExecutableKey] as? String == "ChatGPT", "remembers real executable")
         check(plist["CFBundleIconName"] == nil, "asset-catalog icon removed so AppIcon.icns wins")
         check(plist["CFBundleIconFile"] as? String == "AppIcon", "clone icon file")
@@ -409,6 +426,60 @@ enum TwoCursorsTests {
             check(exports.contains("export SAND_USER_DATA_DIR=\"\(userData)\""), "shim exports SAND_USER_DATA_DIR")
             check(exports.contains("export SAND_DATA_ROOT=\"\(dataRoot)\""), "shim exports SAND_DATA_ROOT")
 
+            let official = URL(fileURLWithPath: "/Applications/Grok Bot.app/Contents/MacOS/Grok Bot")
+            let script = try GrokCloneScript.wrapperSource(profile: profile, store: store, officialExecutable: official)
+            check(script.hasPrefix("#!/bin/bash\n"), "grok wrapper is a shell script")
+            check(script.contains("export SAND_USER_DATA_DIR=\(GrokCloneScript.shellQuote(userData))"), "script exports user-data")
+            check(script.contains("export SAND_DATA_ROOT=\(GrokCloneScript.shellQuote(dataRoot))"), "script exports data-root")
+            check(script.contains("mkdir -p \(GrokCloneScript.shellQuote(userData)) \(GrokCloneScript.shellQuote(dataRoot))"), "script creates both dirs")
+            check(script.contains(GrokCloneScript.siblingLaunchAssignment), "script execs the wrapper's own Grok Bot binary")
+            check(script.contains("exec \"$GROK\" --use-mock-keychain \"$@\""), "ad-hoc copy skips the official keychain prompt")
+            check(script.contains("exec \"$GROK\" \"$@\""), "official-binary fallback does not force mock keychain")
+            check(!script.contains("--user-data-dir"), "script does not pass --user-data-dir")
+            check(script.contains(GrokCloneScript.shellQuote(official.path)), "script falls back to the official executable")
+            check(GrokCloneScript.shellQuote("/Users/o'brien/Application Support") == "'/Users/o'\\''brien/Application Support'", "shell quote")
+            check(GrokCloneScript.wrapperIsCurrent(
+                executableName: GrokCloneScript.executableName,
+                scriptSource: script,
+                revision: GrokCloneScript.revision
+            ), "fresh script wrapper is current")
+            check(!GrokCloneScript.wrapperIsCurrent(
+                executableName: "TwoCursorsLauncher",
+                scriptSource: script,
+                revision: GrokCloneScript.revision
+            ), "TwoCursorsLauncher grok wrapper is stale")
+            check(!GrokCloneScript.wrapperIsCurrent(
+                executableName: GrokCloneScript.executableName,
+                scriptSource: script,
+                revision: "1"
+            ), "revision 1 script wrapper is rebuilt")
+            check(!GrokCloneScript.wrapperIsCurrent(
+                executableName: GrokCloneScript.executableName,
+                scriptSource: "#!/bin/bash\nexport SAND_USER_DATA_DIR=/tmp\nexport SAND_DATA_ROOT=/tmp\nexec /Applications/Grok\\ Bot.app/Contents/MacOS/Grok\\ Bot \"$@\"\n",
+                revision: GrokCloneScript.revision
+            ), "script that execs only the official binary is rebuilt")
+
+            let rendered = try CLIShimInstaller.render(
+                profile: profile,
+                store: store,
+                recipe: GrokRecipe(),
+                executable: official
+            )
+            check(rendered.contains("export SAND_USER_DATA_DIR="), "cli shim exports SAND_USER_DATA_DIR")
+            check(rendered.contains(profile.wrapperFileName), "cli shim targets the wrapper bundle")
+            check(rendered.contains("Contents/MacOS/Grok Bot"), "cli shim execs the wrapper binary")
+            check(rendered.contains("--use-mock-keychain"), "cli shim uses mock keychain for the wrapper binary")
+            check(!rendered.contains("--user-data-dir"), "cli shim does not pass --user-data-dir")
+            check(rendered != script, "cli shim is not the in-bundle script")
+            let cursorShim = try CLIShimInstaller.render(
+                profile: try store.create(name: "Cursor Work", recipeID: "cursor"),
+                store: store,
+                recipe: CursorRecipe(),
+                executable: URL(fileURLWithPath: "/Applications/Cursor.app/Contents/MacOS/Cursor")
+            )
+            check(cursorShim.contains("--user-data-dir="), "cursor shim still passes --user-data-dir")
+            check(!cursorShim.contains("SAND_USER_DATA_DIR"), "cursor shim has no SAND_USER_DATA_DIR")
+
             let others: [any AppRecipe] = [CursorRecipe(), ClaudeRecipe()]
             for recipe in others {
                 let other = try store.create(name: recipe.displayName, recipeID: recipe.id)
@@ -428,6 +499,38 @@ enum TwoCursorsTests {
         }
     }
 
+    static func grokPrimaryAndShipIt() {
+        let official = URL(fileURLWithPath: "/Applications/Grok Bot.app")
+        let cloneURL = URL(fileURLWithPath: "/Users/me/Applications/Grok Bot HZ.app")
+        let sand = GrokRecipe.bundleIdentifier
+        let cloneEnv = ["SAND_USER_DATA_DIR": "/tmp/user-data", "SAND_DATA_ROOT": "/tmp/data-root"]
+
+        check(GrokInstances.blocksShipIt(bundleIdentifier: sand, bundleURL: official, officialAppURL: official), "primary blocks ShipIt")
+        check(GrokInstances.blocksShipIt(bundleIdentifier: sand, bundleURL: URL(fileURLWithPath: "/Applications/Grok Bot.app/"), officialAppURL: official), "trailing slash still matches the official bundle")
+        check(!GrokInstances.blocksShipIt(bundleIdentifier: sand, bundleURL: cloneURL, officialAppURL: official), "wrapper bundle does not block ShipIt")
+        check(!GrokInstances.blocksShipIt(bundleIdentifier: CursorRecipe.bundleIdentifier, bundleURL: official, officialAppURL: official), "cursor does not block Grok ShipIt")
+
+        check(GrokInstances.shouldQuitForUpdate(bundleIdentifier: sand, bundleURL: official, environment: [:], officialAppURL: official), "quit primary")
+        check(GrokInstances.shouldQuitForUpdate(bundleIdentifier: sand, bundleURL: official, environment: cloneEnv, officialAppURL: official), "quit clone still execing the official binary")
+        check(GrokInstances.shouldQuitForUpdate(bundleIdentifier: "app.lotsofagents.clone.grok.hz", bundleURL: cloneURL, environment: cloneEnv, officialAppURL: official), "quit wrapper clone")
+        check(!GrokInstances.shouldQuitForUpdate(bundleIdentifier: CursorRecipe.bundleIdentifier, bundleURL: URL(fileURLWithPath: "/Applications/Cursor.app"), environment: [:], officialAppURL: official), "do not quit Cursor")
+
+        check(GrokInstances.shouldForceNewPrimary(officialAppURL: official, processes: [
+            GrokInstances.Process(bundleIdentifier: sand, bundleURL: official, environment: cloneEnv),
+        ]), "new primary when only clones hold the official bundle")
+        check(!GrokInstances.shouldForceNewPrimary(officialAppURL: official, processes: [
+            GrokInstances.Process(bundleIdentifier: sand, bundleURL: official, environment: [:]),
+        ]), "focus the running primary")
+        check(!GrokInstances.shouldForceNewPrimary(officialAppURL: official, processes: [
+            GrokInstances.Process(bundleIdentifier: sand, bundleURL: official, environment: [:]),
+            GrokInstances.Process(bundleIdentifier: sand, bundleURL: official, environment: cloneEnv),
+        ]), "primary wins over a clone on the same bundle")
+        check(!GrokInstances.shouldForceNewPrimary(officialAppURL: official, processes: [
+            GrokInstances.Process(bundleIdentifier: "app.lotsofagents.clone.grok.hz", bundleURL: cloneURL, environment: cloneEnv),
+        ]), "plain open starts the primary when clones have their own bundle")
+        check(!GrokInstances.shouldForceNewPrimary(officialAppURL: official, processes: []), "nothing running")
+    }
+
     static func parseFlags() {
         check(ProcessArguments.userDataDir(from: ["Cursor", "--user-data-dir=/tmp/a"]) == "/tmp/a", "equals form")
         check(ProcessArguments.userDataDir(from: ["Cursor", "--user-data-dir", "/tmp/b"]) == "/tmp/b", "split form")
@@ -437,6 +540,18 @@ enum TwoCursorsTests {
     static func ownProcessArgs() {
         let args = ProcessArguments.arguments(for: ProcessInfo.processInfo.processIdentifier)
         check(!args.isEmpty, "KERN_PROCARGS2 should return argv")
+        let env = ProcessArguments.environment(for: ProcessInfo.processInfo.processIdentifier)
+        check(env["PATH"] != nil || env["HOME"] != nil, "KERN_PROCARGS2 should include the environment")
+        let fromArg = ProcessArguments.isolatedUserDataDir(in: ProcessArguments.Snapshot(
+            arguments: ["Grok Bot", "--user-data-dir=/tmp/a"],
+            environment: ["SAND_USER_DATA_DIR": "/tmp/b"]
+        ))
+        check(fromArg == "/tmp/a", "argv user-data-dir still identifies Cursor/Claude/ChatGPT")
+        let fromEnv = ProcessArguments.isolatedUserDataDir(in: ProcessArguments.Snapshot(
+            arguments: ["Grok Bot"],
+            environment: ["SAND_USER_DATA_DIR": "/tmp/b"]
+        ))
+        check(fromEnv == "/tmp/b", "grok clone is identified by SAND_USER_DATA_DIR")
     }
 
     static func writeICNS() {
@@ -519,7 +634,11 @@ enum TwoCursorsTests {
         check(recipe.urlSchemes == ["sand"], "scheme")
         check(!recipe.seedsMarketplace, "no marketplace")
         check(recipe.seedsUpdateDisabled, "grok may seed update.mode")
-        check(recipe.supportsUserDataDir, "electron flags")
+        check(!recipe.supportsUserDataDir, "grok does not take --user-data-dir")
+        check(recipe.launchArguments(
+            userData: URL(fileURLWithPath: "/tmp/user-data"),
+            extensions: URL(fileURLWithPath: "/tmp/extensions")
+        ).isEmpty, "grok launch arguments stay empty")
         check(RecipeRegistry.all.first?.id == "grok", "grok is primary recipe")
         check(RecipeRegistry.all.contains { $0.id == "cursor" }, "cursor still registered")
         check(RecipeRegistry.all.contains { $0.id == "claude" }, "claude registered")

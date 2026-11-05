@@ -14,7 +14,7 @@ and the clone's window shows the stock icon.
 Claude has the same problem, and it also breaks sign-in: the browser hands the login back via
 `claude://`, which Launch Services delivers to the main Claude app instead of the clone.
 
-Recipes with `clonesAppBundle = true` (all four: Grok Bot, Cursor, Claude, ChatGPT) instead get a real per-clone app built by
+Recipes with `clonesAppBundle = true` (Cursor, Claude, ChatGPT) instead get a real per-clone app built by
 `BundleCloner`:
 
 - `cp -c -R` APFS clone of `/Applications/ChatGPT.app` (near-zero disk cost)
@@ -36,8 +36,24 @@ Recipes with `clonesAppBundle = true` (all four: Grok Bot, Cursor, Claude, ChatG
 
 ## Structure
 
+Grok Bot is the exception. Its wrapper is an APFS clone of the official app. The Dock executable is still `grokbot-clone.sh`, and that script execs the clone's own `Grok Bot` binary so the process is not `/Applications/Grok Bot.app`:
+
 ```
 ~/Applications/Grok Bot Personal.app/
+├── Contents/
+│   ├── Info.plist                      # clone bundle id, CFBundleExecutable = grokbot-clone.sh
+│   ├── MacOS/
+│   │   ├── grokbot-clone.sh            # exports SAND_* then execs ./Grok Bot
+│   │   └── Grok Bot                    # ad-hoc-signed copy of the official mach-o
+│   ├── Frameworks/                     # cloned; ShipIt removed
+│   └── Resources/
+│       └── AppIcon.icns               # Custom tinted icon
+```
+
+Cursor, Claude, and ChatGPT wrappers are bundle clones whose executable is still `TwoCursorsLauncher`.
+
+```
+~/Applications/Cursor Personal.app/
 ├── Contents/
 │   ├── Info.plist                      # Unique bundle ID, icon reference
 │   ├── MacOS/
@@ -48,9 +64,11 @@ Recipes with `clonesAppBundle = true` (all four: Grok Bot, Cursor, Claude, ChatG
 
 ## Launch Flow
 
+Grok Bot does not follow this flow. macOS runs `grokbot-clone.sh`, which exports `SAND_USER_DATA_DIR` and `SAND_DATA_ROOT` and `exec`s `/Applications/Grok Bot.app/Contents/MacOS/Grok Bot` with no `--user-data-dir`. The steps below are Cursor, Claude, and ChatGPT.
+
 1. **User opens wrapper** (Finder, Dock, or Launch Services)
    - macOS launches `TwoCursorsLauncher` (the wrapper's `CFBundleExecutable`)
-   - Wrapper process starts with bundle ID `app.lotsofagents.clone.grok.personal`
+   - Wrapper process starts with the clone's bundle ID (for example `app.lotsofagents.clone.cursor.personal`)
 
 2. **Launcher reads profile configuration**
    - Profile ID from `Info.plist` → `TwoCursorsProfileID`
@@ -200,7 +218,7 @@ All environment variables are passed through to the child:
 - Custom vars set by the launcher (e.g., `HOME` for overlay mode)
 - `ELECTRON_RUN_AS_NODE` is explicitly removed (prevents Electron from running as Node.js)
 - `CURSOR_DATA_DIR` set for overlay mode (private `~/.cursor`)
-- Grok Bot clones only: `SAND_USER_DATA_DIR` (`Profiles/<id>/user-data`) and `SAND_DATA_ROOT` (`Profiles/<id>/data-root`). Grok Bot ignores `--user-data-dir` and takes the single-instance lock on the default user-data path, so a clone without these variables exits immediately when the main app is running. `SAND_DATA_ROOT` otherwise defaults to `~/.grokbot`, which every clone would share. The Dock wrapper and the in-app Launch button both exec the binary with this environment (`open -n -a "Grok Bot" --env` does not). Cursor, Claude, and ChatGPT do not get these variables.
+- Grok Bot clones do not use this launcher. Their Dock app executable is `grokbot-clone.sh`, which exports `SAND_USER_DATA_DIR` (`Profiles/<id>/user-data`) and `SAND_DATA_ROOT` (`Profiles/<id>/data-root`) and execs the `Grok Bot` mach-o inside the wrapper. Execing `/Applications/Grok Bot.app` instead makes every clone the primary app: the Dock focuses that clone, and ShipIt aborts with code -9 while it is running. Cursor, Claude, and ChatGPT do not get these variables and still use TwoCursorsLauncher.
 
 ## Arguments Preservation
 

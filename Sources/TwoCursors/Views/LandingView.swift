@@ -175,6 +175,7 @@ struct BrandMarkView: View {
 struct RecipeHubView: View {
     @EnvironmentObject private var model: AppModel
     var recipeID: String
+    @State private var confirmingGrokQuit = false
 
     private var recipe: any AppRecipe {
         RecipeRegistry.recipe(id: recipeID) ?? GrokRecipe()
@@ -227,6 +228,14 @@ struct RecipeHubView: View {
                             }
                             .buttonStyle(E2BPrimaryButtonStyle())
                             .disabled(!status.isInstalled)
+                            if recipeID == GrokRecipe().id {
+                                Button("QUIT ALL") {
+                                    confirmingGrokQuit = true
+                                }
+                                .buttonStyle(E2BSecondaryButtonStyle())
+                                .disabled(!status.isInstalled)
+                                .help("Quit every Grok Bot instance so the official app can update.")
+                            }
                         }
                     }
                     Spacer()
@@ -269,6 +278,16 @@ struct RecipeHubView: View {
         }
         .background(E2B.bg)
         .preferredColorScheme(.dark)
+        .confirmationDialog(
+            "Quit every Grok Bot instance?",
+            isPresented: $confirmingGrokQuit,
+            titleVisibility: .visible
+        ) {
+            Button("Quit clones and primary", role: .destructive) { model.quitAllGrokInstances() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("ShipIt cannot replace Grok Bot.app while a clone or the primary is still running from that app. Open the primary afterward and update before launching clones.")
+        }
     }
 
     private func panel<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -296,7 +315,7 @@ struct RecipeHubView: View {
     private var howTo: String {
         switch recipeID {
         case GrokRecipe().id:
-            return "Grok Bot has no account switcher. Make Work and Personal clones, launch each, and sign into a different account. Both stay signed in."
+            return "Grok Bot has no account switcher. Make Work and Personal clones, launch each, and sign into a different account. Both stay signed in. The Dock icon for the official app opens the primary, even while a clone is running. Quit all instances before an in-app update — ShipIt will not replace Grok Bot.app while any copy of that app is still running."
         case ClaudeRecipe().id:
             return "Claude Desktop has no account switcher. Make a clone per login, launch it, and sign in there. Repeat for each Anthropic account you need."
         case ChatGPTRecipe().id:

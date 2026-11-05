@@ -59,6 +59,7 @@ public struct BundleCloner {
         bundleIdentifier: String,
         displayName: String,
         keepsBundleName: Bool = false,
+        executableName: String = "TwoCursorsLauncher",
         extra: [String: Any]
     ) -> [String: Any] {
         var plist = source
@@ -69,7 +70,7 @@ public struct BundleCloner {
             plist["CFBundleName"] = displayName
         }
         plist["CFBundleDisplayName"] = displayName
-        plist["CFBundleExecutable"] = "TwoCursorsLauncher"
+        plist["CFBundleExecutable"] = executableName
         plist["CFBundleIconFile"] = "AppIcon"
         // CFBundleIconName points at the official Assets.car icon and wins over CFBundleIconFile.
         plist.removeValue(forKey: "CFBundleIconName")
@@ -127,17 +128,9 @@ public struct BundleCloner {
 
         try writeIcon(contents.appendingPathComponent("Resources/AppIcon.icns"))
 
-        // Sparkle (ChatGPT) and Squirrel (Claude) replace the host bundle in place; in a clone that
-        // would install the stock app over the clone. Strip the installers from the clone only.
-        let frameworks = contents.appendingPathComponent("Frameworks")
-        for relative in [
-            "Sparkle.framework/Versions/Current/Autoupdate",
-            "Sparkle.framework/Versions/Current/Updater.app",
-            "Sparkle.framework/Versions/Current/XPCServices/Installer.xpc",
-            "Squirrel.framework/Versions/Current/Resources/ShipIt",
-        ] {
-            try? fileManager.removeItem(at: frameworks.appendingPathComponent(relative))
-        }
+        // Sparkle (ChatGPT) and Squirrel (Grok Bot / Claude) replace the host bundle in place; in a
+        // clone that would install the stock app over the clone. Strip the installers from the clone only.
+        stripNestedUpdaters(in: contents.appendingPathComponent("Frameworks"))
 
         let launcherDest = macos.appendingPathComponent("TwoCursorsLauncher")
         try? fileManager.removeItem(at: launcherDest)
@@ -155,6 +148,97 @@ public struct BundleCloner {
             try fileManager.removeItem(at: dest)
         }
         try fileManager.moveItem(at: staging, to: dest)
+    }
+
+    /// APFS clone of Grok Bot whose Dock executable is `grokbot-clone.sh`.
+    ///
+    /// The script execs `Contents/MacOS/Grok Bot` inside this copy. The process bundle is the
+    /// wrapper, so the official app stays free for Dock, `open -a`, and ShipIt. The mach-o is
+    /// ad-hoc signed without hardened runtime; frameworks keep the official signature.
+    /// The Developer ID `_CodeSignature` is removed — a stale seal after the Info.plist edit
+    /// makes macOS kill the app as damaged.
+    public func buildScriptHost(
+        source: URL,
+        dest: URL,
+        bundleIdentifier: String,
+        displayName: String,
+        scriptName: String,
+        scriptBody: String,
+        writeIcon: (URL) throws -> Void,
+        extraInfo: [String: Any]
+    ) throws {
+        let parent = dest.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        let staging = parent.appendingPathComponent(".\(dest.lastPathComponent).building-\(UUID().uuidString)")
+        defer { try? fileManager.removeItem(at: staging) }
+
+        try run("/bin/cp", ["-c", "-R", source.path, staging.path])
+
+        let contents = staging.appendingPathComponent("Contents")
+        let macos = contents.appendingPathComponent("MacOS")
+        let plistURL = contents.appendingPathComponent("Info.plist")
+        guard let sourceInfo = NSDictionary(contentsOf: plistURL) as? [String: Any],
+              let realExecutable = sourceInfo["CFBundleExecutable"] as? String else {
+            throw TwoCursorsError.wrapperFailed("Could not read \(source.lastPathComponent) Info.plist")
+        }
+        guard fileManager.isExecutableFile(atPath: macos.appendingPathComponent(realExecutable).path) else {
+            throw TwoCursorsError.wrapperFailed("\(source.lastPathComponent) is missing \(realExecutable).")
+        }
+
+        var extra = extraInfo
+        extra[Self.sourceAppKey] = source.path
+        extra[Self.sourceVersionKey] = Self.versionStamp(of: source) ?? ""
+        let bundleName = sourceInfo["CFBundleName"] as? String ?? ""
+        let helper = contents.appendingPathComponent("Frameworks/\(bundleName) Helper.app")
+        let plist = Self.cloneInfoPlist(
+            source: sourceInfo,
+            bundleIdentifier: bundleIdentifier,
+            displayName: displayName,
+            keepsBundleName: fileManager.fileExists(atPath: helper.path),
+            executableName: scriptName,
+            extra: extra
+        )
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: plistURL, options: .atomic)
+
+        let scriptURL = macos.appendingPathComponent(scriptName)
+        try scriptBody.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+        try writeIcon(contents.appendingPathComponent("Resources/AppIcon.icns"))
+        stripNestedUpdaters(in: contents.appendingPathComponent("Frameworks"))
+
+        // A leftover Developer ID seal no longer matches Info.plist. Delete it before ad-hoc signing
+        // so Gatekeeper does not treat the wrapper as a tampered notarized app.
+        try? fileManager.removeItem(at: contents.appendingPathComponent("_CodeSignature"))
+        let xattr = Process()
+        xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        xattr.arguments = ["-cr", staging.path]
+        xattr.standardOutput = Pipe()
+        xattr.standardError = Pipe()
+        if (try? xattr.run()) != nil {
+            xattr.waitUntilExit()
+        }
+
+        try adHocSignKeepingEntitlements(macos.appendingPathComponent(realExecutable))
+        // Shallow signature of the script only. `--deep` would re-sign the official frameworks.
+        try run("/usr/bin/codesign", ["--force", "--sign", "-", scriptURL.path])
+
+        if fileManager.fileExists(atPath: dest.path) {
+            try fileManager.removeItem(at: dest)
+        }
+        try fileManager.moveItem(at: staging, to: dest)
+    }
+
+    private func stripNestedUpdaters(in frameworks: URL) {
+        for relative in [
+            "Sparkle.framework/Versions/Current/Autoupdate",
+            "Sparkle.framework/Versions/Current/Updater.app",
+            "Sparkle.framework/Versions/Current/XPCServices/Installer.xpc",
+            "Squirrel.framework/Versions/Current/Resources/ShipIt",
+        ] {
+            try? fileManager.removeItem(at: frameworks.appendingPathComponent(relative))
+        }
     }
 
     /// Entitlements an ad-hoc signature may not carry (AMFI kills the process) — they are tied to

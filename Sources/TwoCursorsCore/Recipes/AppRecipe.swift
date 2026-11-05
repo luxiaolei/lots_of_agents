@@ -12,12 +12,15 @@ public struct GrokRecipe: AppRecipe {
     public let urlSchemes = ["sand"]
     public let seedsMarketplace = false
     public let seedsUpdateDisabled = true
-    public let supportsUserDataDir = true
+    /// Grok Bot ignores this flag and locks the default profile, so passing it does not isolate a clone.
+    public let supportsUserDataDir = false
     public let downloadURL = URL(string: "https://cursor.com/bot/onboarding")!
 
-    /// Stock Electron: the spawned child registers as the official app, so the clone needs its own
-    /// bundle to keep its name/icon in the Dock and Cmd-Tab (see `BundleCloner`).
-    public let clonesAppBundle = true
+    /// Not a Cursor-style TwoCursorsLauncher clone. The Dock app is an APFS copy whose
+    /// executable is `grokbot-clone.sh`. The script sets `SAND_*` and execs that copy's own
+    /// `Grok Bot` binary, so the process is not the official bundle.
+    public let clonesAppBundle = false
+    public let launchesOfficialBinary = true
 
     public init() {}
 }
@@ -106,6 +109,8 @@ public protocol AppRecipe {
     var seedsMarketplace: Bool { get }
     var seedsUpdateDisabled: Bool { get }
     var clonesAppBundle: Bool { get }
+    /// Dock wrapper execs the official binary (Grok Bot). Other recipes launch a clone of the app bundle.
+    var launchesOfficialBinary: Bool { get }
     var needsShortUserDataPath: Bool { get }
     var supportsUserDataDir: Bool { get }
     var downloadURL: URL { get }
@@ -118,6 +123,7 @@ public extension AppRecipe {
     var forcesFullHomeOverlay: Bool { false }
     var seedsUpdateDisabled: Bool { false }
     var clonesAppBundle: Bool { false }
+    var launchesOfficialBinary: Bool { false }
     var needsShortUserDataPath: Bool { false }
 
     func detect(using detector: InstalledAppDetector) -> AppStatus {

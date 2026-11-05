@@ -54,8 +54,21 @@ public struct WrapperAppBuilder {
     /// wrapper for a recipe that now clones the app bundle.
     public func needsRefresh(profile: Profile, launcherBinary: URL) -> Bool {
         let url = wrapperURL(for: profile)
-        guard let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")) else {
+        guard let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")) as? [String: Any] else {
             return false
+        }
+        if RecipeRegistry.recipe(id: profile.recipeID)?.launchesOfficialBinary == true {
+            let scriptURL = url
+                .appendingPathComponent("Contents/MacOS")
+                .appendingPathComponent(GrokCloneScript.executableName)
+            let source = try? String(contentsOf: scriptURL, encoding: .utf8)
+            if !GrokCloneScript.wrapperIsCurrent(
+                executableName: info["CFBundleExecutable"] as? String,
+                scriptSource: source,
+                revision: info[GrokCloneScript.revisionKey] as? String
+            ) {
+                return true
+            }
         }
         if RecipeRegistry.recipe(id: profile.recipeID)?.clonesAppBundle == true,
            info[BundleCloner.realExecutableKey] == nil {
@@ -89,6 +102,11 @@ public struct WrapperAppBuilder {
     ) throws {
         guard fileManager.isExecutableFile(atPath: launcherBinary.path) else {
             throw TwoCursorsError.wrapperFailed("Launcher binary missing at \(launcherBinary.path)")
+        }
+
+        if let recipe = RecipeRegistry.recipe(id: profile.recipeID), recipe.launchesOfficialBinary {
+            try writeGrokScriptBundle(profile: profile, store: store, recipe: recipe, at: dest, launcherBinary: launcherBinary)
+            return
         }
 
         if let recipe = RecipeRegistry.recipe(id: profile.recipeID), recipe.clonesAppBundle {
@@ -140,6 +158,48 @@ public struct WrapperAppBuilder {
 
         IconComposer.removeCustomIconOverride(from: dest, fileManager: fileManager)
         adHocSign(dest)
+        touch(dest)
+        Self.refreshLaunchServices(for: dest)
+    }
+
+    /// APFS clone of Grok Bot whose executable is `grokbot-clone.sh`.
+    /// Replaces a thin script wrapper or an older TwoCursorsLauncher clone in place.
+    private func writeGrokScriptBundle(
+        profile: Profile,
+        store: ProfileStore,
+        recipe: any AppRecipe,
+        at dest: URL,
+        launcherBinary: URL
+    ) throws {
+        if fileManager.fileExists(atPath: dest.path),
+           NSRunningApplication.runningApplications(withBundleIdentifier: profile.wrapperBundleIdentifier)
+               .contains(where: { $0.processIdentifier != getpid() }) {
+            return
+        }
+        let status = recipe.detect(using: InstalledAppDetector())
+        guard status.isInstalled, let source = status.appURL, let executable = status.executableURL else {
+            throw TwoCursorsError.appNotInstalled(recipe.displayName)
+        }
+        let script = try GrokCloneScript.wrapperSource(profile: profile, store: store, officialExecutable: executable)
+        let base = IconComposer.baseIcon(for: profile.recipeID)
+        try IconComposer.writeICNS(spec: profile.icon, to: store.iconURL(for: profile), base: base)
+        try BundleCloner(fileManager: fileManager).buildScriptHost(
+            source: source,
+            dest: dest,
+            bundleIdentifier: profile.wrapperBundleIdentifier,
+            displayName: profile.wrapperDisplayName,
+            scriptName: GrokCloneScript.executableName,
+            scriptBody: script,
+            writeIcon: { try IconComposer.writeICNS(spec: profile.icon, to: $0, base: base) },
+            extraInfo: [
+                "TwoCursorsProfileID": profile.id.uuidString,
+                "TwoCursorsRecipeID": profile.recipeID,
+                "TwoCursorsCatalog": store.catalogURL.path,
+                GrokCloneScript.revisionKey: GrokCloneScript.revision,
+                Self.launcherStampKey: Self.launcherStamp(launcherBinary),
+            ]
+        )
+        IconComposer.removeCustomIconOverride(from: dest, fileManager: fileManager)
         touch(dest)
         Self.refreshLaunchServices(for: dest)
     }
